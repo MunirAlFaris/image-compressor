@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ضغط صور داخل ملف ZIP مع الحفاظ على الاسم والامتداد</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, Noto Sans, "Apple Color Emoji", "Segoe UI Emoji"; }
+    body { margin: 24px; color: #0f172a; background: #f8fafc; }
+    .card { background: #fff; border-radius: 16px; box-shadow: 0 8px 24px rgba(2,6,23,.06); padding: 20px; max-width: 900px; margin: 0 auto 32px; }
+    h1 { font-size: 1.5rem; margin: 0 0 12px; }
+    .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; align-items: center; }
+    label { font-weight: 600; font-size: .95rem; }
+    input[type="file"], select, input[type="number"], input[type="range"] { width: 100%; padding: 10px; border-radius: 12px; border: 1px solid #e2e8f0; background: #fff; }
+    .hint { color: #475569; font-size: .9rem; }
+    button { appearance: none; border: 0; border-radius: 14px; padding: 12px 16px; background: #0ea5e9; color: #fff; font-weight: 700; cursor: pointer; box-shadow: 0 8px 20px rgba(14,165,233,.25); }
+    button:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+    progress { width: 100%; height: 12px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    details { background: #f1f5f9; padding: 12px; border-radius: 12px; }
+    summary { cursor: pointer; font-weight: 700; }
+    .pill { display:inline-block; background:#e2e8f0; padding:2px 8px; border-radius:999px; font-size:.8rem; }
+  </style>
+  <!-- JSZip -->
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <!-- UPNG.js (ضغط PNG فعال مع الحفاظ على الدقة) -->
+  <script src="https://cdn.jsdelivr.net/npm/upng-js@2.1.0/UPNG.js"></script>
+</head>
+<body>
+  <div class="card">
+    <h1>ضغط صور داخل ملف <span class="pill">ZIP</span> مع الحفاظ على الاسم والامتداد</h1>
+    <p class="hint">ارفع ملف ZIP يحتوي على صور (JPG/PNG/WebP). سيعاد ترميز كل صورة بنفـس <b>الاسم</b> و<b>الامتداد</b> للحفاظ على توافق المنتجات لديك، ثم ستحصل على ZIP جديد للتنزيل.</p>
+
+    <div class="row" style="margin: 16px 0;">
+      <div>
+        <label>ملف ZIP للصور</label>
+        <input id="zipInput" type="file" accept=".zip" />
+      </div>
+      <div>
+        <label>جودة JPEG</label>
+        <input id="jpegQ" type="range" min="50" max="95" value="85" />
+        <div class="hint">القيمة الحالية: <span id="jpegQV">85</span></div>
+      </div>
+      <div>
+        <label>جودة WebP</label>
+        <input id="webpQ" type="range" min="50" max="95" value="80" />
+        <div class="hint">القيمة الحالية: <span id="webpQV">80</span></div>
+      </div>
+      <div>
+        <label>ضغط PNG (لوحة 256 لون)</label>
+        <select id="pngMode">
+          <option value="auto" selected>تلقائي (موصى به)</option>
+          <option value="lossless">Lossless (عادةً أكبر)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top: 8px;">
+      <button id="startBtn" disabled>ابدأ الضغط وإنشاء ZIP جديد</button>
+      <button id="downloadBtn" disabled>تنزيل ZIP المضغوط</button>
+    </div>
+
+    <div style="margin-top:16px;">
+      <progress id="prog" value="0" max="100"></progress>
+      <div class="hint" id="status">بانتظار اختيار ملف…</div>
+    </div>
+
+    <details style="margin-top:16px;">
+      <summary>ملاحظات</summary>
+      <ul class="hint">
+        <li>لا يتم تغيير <span class="mono">width/height</span> نهائياً – نحافظ على الدقة، فقط نعيد الترميز.</li>
+        <li>JPEG/WebP: ضغط بفقدان بيانات (قابل للتحكم). PNG: يستخدم <span class="mono">UPNG.js</span> (لوحة 256 لون) في وضع <em>تلقائي</em> أو lossless.</li>
+        <li>سيُحافَظ على نفس الامتداد: <span class="mono">.jpg → .jpg</span>، <span class="mono">.png → .png</span>…</li>
+        <li>الملفات غير الصورية داخل الـZIP تُنسخ كما هي.</li>
+      </ul>
+    </details>
+  </div>
+
+  <script>
+    const zipInput = document.getElementById('zipInput');
+    const startBtn = document.getElementById('startBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const prog = document.getElementById('prog');
+    const statusEl = document.getElementById('status');
+
+    const jpegQ = document.getElementById('jpegQ');
+    const webpQ = document.getElementById('webpQ');
+    const jpegQV = document.getElementById('jpegQV');
+    const webpQV = document.getElementById('webpQV');
+    const pngMode = document.getElementById('pngMode');
+
+    jpegQ.addEventListener('input', () => jpegQV.textContent = jpegQ.value);
+    webpQ.addEventListener('input', () => webpQV.textContent = webpQ.value);
+
+    let sourceZipName = null;
+    let resultBlob = null;
+
+    zipInput.addEventListener('change', () => {
+      const f = zipInput.files?.[0];
+      sourceZipName = f ? f.name.replace(/\.zip$/i, '') : null;
+      startBtn.disabled = !f;
+      statusEl.textContent = f ? `تم اختيار: ${f.name}` : 'بانتظار اختيار ملف…';
+    });
+
+    function extOf(name){ return (name.match(/\.[^.]+$/)?.[0] || '').toLowerCase(); }
+    function isImageExt(ext){ return ['.jpg','.jpeg','.png','.webp'].includes(ext); }
+
+    async function blobToImageData(blob){
+      const bmp = await createImageBitmap(blob);
+      const canvas = new OffscreenCanvas(bmp.width, bmp.height);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(bmp, 0, 0);
+      const imgData = ctx.getImageData(0, 0, bmp.width, bmp.height);
+      bmp.close();
+      return imgData; // {data: Uint8ClampedArray, width, height}
+    }
+
+    async function reencodeJPEGorWebP(imgData, type, quality){
+      // استخدام Canvas لإعادة الترميز بنفس الأبعاد
+      const canvas = new OffscreenCanvas(imgData.width, imgData.height);
+      const ctx = canvas.getContext('2d');
+      const tmp = new ImageData(imgData.data, imgData.width, imgData.height);
+      ctx.putImageData(tmp, 0, 0);
+      const q = Math.max(0.5, Math.min(0.95, (quality||80)/100));
+      const blob = await canvas.convertToBlob({ type, quality: q });
+      return blob;
+    }
+
+    async function recompressPNG(imgData){
+      // طريقتان: lossless أو تقليل ألوان تلقائي (قد يخفّض الحجم كثيراً)
+      const w = imgData.width, h = imgData.height;
+      // تحويل Uint8ClampedArray → Uint8Array RGBA
+      const rgba = new Uint8Array(imgData.data.buffer);
+      if (pngMode.value === 'lossless'){
+        const png = UPNG.encode([rgba.buffer], w, h, 0); // 0 == lossless
+        return new Blob([png], { type: 'image/png' });
+      } else {
+        // تلقائي: لوحة 256 لون
+        const png = UPNG.encode([rgba.buffer], w, h, 256);
+        return new Blob([png], { type: 'image/png' });
+      }
+    }
+
+    async function processZip(file){
+      const jszip = new JSZip();
+      const src = await jszip.loadAsync(file);
+      const out = new JSZip();
+      const files = Object.values(src.files);
+
+      let processed = 0;
+      for (const entry of files){
+        if (entry.dir){
+          out.folder(entry.name.replace(/\/$/, ''));
+          continue;
+        }
+        const ext = extOf(entry.name);
+        if (!isImageExt(ext)){
+          // نسخ كما هو
+          const buf = await src.file(entry.name).async('arraybuffer');
+          out.file(entry.name, buf);
+        } else {
+          try {
+            const blob = new Blob([await src.file(entry.name).async('arraybuffer')]);
+            const imgData = await blobToImageData(blob);
+            let outBlob;
+            if (ext === '.jpg' || ext === '.jpeg'){
+              outBlob = await reencodeJPEGorWebP(imgData, 'image/jpeg', parseInt(jpegQ.value,10));
+            } else if (ext === '.webp'){
+              outBlob = await reencodeJPEGorWebP(imgData, 'image/webp', parseInt(webpQ.value,10));
+            } else if (ext === '.png'){
+              outBlob = await recompressPNG(imgData);
+            }
+            const arrbuf = await outBlob.arrayBuffer();
+            out.file(entry.name, arrbuf); // نفس الاسم والامتداد تماماً
+          } catch(e){
+            console.error('خطأ في معالجة', entry.name, e);
+            // في حال الفشل، ننسخ الملف الأصلي دون تغيير حفاظاً على التوافق
+            const buf = await src.file(entry.name).async('arraybuffer');
+            out.file(entry.name, buf);
+          }
+        }
+        processed++;
+        prog.value = Math.round(processed * 100 / files.length);
+        statusEl.textContent = `جارٍ المعالجة… ${processed}/${files.length}`;
+        // إتاحة نفس لضمان سلاسة الواجهة
+        await new Promise(r => setTimeout(r));
+      }
+
+      statusEl.textContent = 'جاري إنشاء ملف ZIP…';
+      const outBlob = await out.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+      resultBlob = outBlob;
+      downloadBtn.disabled = false;
+      statusEl.textContent = 'جاهز للتنزيل.';
+    }
+
+    startBtn.addEventListener('click', async () => {
+      const f = zipInput.files?.[0];
+      if (!f) return;
+      startBtn.disabled = true;
+      downloadBtn.disabled = true;
+      prog.value = 0; statusEl.textContent = 'جارٍ القراءة…';
+      try {
+        await processZip(f);
+      } catch (e){
+        console.error(e);
+        statusEl.textContent = 'حدث خطأ أثناء المعالجة.';
+      } finally {
+        startBtn.disabled = false;
+      }
+    });
+
+    downloadBtn.addEventListener('click', () => {
+      if (!resultBlob) return;
+      const name = (sourceZipName || 'images') + '.compressed.zip';
+      const url = URL.createObjectURL(resultBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    });
+  </script>
+</body>
+</html>
